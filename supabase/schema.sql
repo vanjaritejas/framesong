@@ -1,6 +1,7 @@
 -- FrameSong database setup
 -- Run once in Supabase: SQL Editor > New query > paste this whole file > Run.
 -- Safe to run again: it skips or replaces what already exists.
+-- Already ran an older version of this file? Also run day2.sql.
 
 -- ─────────────────────────────────────────────
 -- Movies
@@ -16,8 +17,8 @@ create table if not exists public.projects (
   song_notes    text check (song_notes is null or char_length(song_notes) <= 500),
   song_path     text,                 -- the user's own song file, if they uploaded one
   status        text not null default 'draft' check (
-                  status in ('draft', 'directing', 'generating', 'editing',
-                             'preview_ready', 'rendering_4k', 'done', 'failed')
+                  status in ('draft', 'directing', 'styling', 'planned', 'generating',
+                             'editing', 'preview_ready', 'rendering_4k', 'done', 'failed')
                 ),
   director_plan jsonb,                -- Day 2: scene order, motion prompts, lyrics
   preview_path  text,                 -- Day 4: 1080p preview video
@@ -39,6 +40,10 @@ create table if not exists public.project_images (
   width         int,
   height        int,
   styled_path   text,                 -- Day 2: cartoon / 3D version of the photo
+  style_request_id text,              -- Day 2: fal.ai job for the redraw
+  style_status  text not null default 'none' check (
+                  style_status in ('none', 'queued', 'running', 'done', 'failed')
+                ),
   motion_prompt text,                 -- Day 2: what moves in this shot
   clip_path     text,                 -- Day 3: the animated clip
   clip_status   text not null default 'pending' check (

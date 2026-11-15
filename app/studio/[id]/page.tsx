@@ -1,12 +1,15 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import DeleteMovieButton from "@/components/DeleteMovieButton";
+import MoviePlanner from "@/components/MoviePlanner";
 import { createClient } from "@/lib/supabase/server";
 import { signedUrlMap } from "@/lib/storage";
+import { isPlan } from "@/lib/plan";
 import {
   ASPECT_NAME,
   STATUS_LABELS,
   STYLE_NAME,
+  needsRestyle,
   ratioCss,
   type AspectId,
   type StyleId,
@@ -25,9 +28,17 @@ type Movie = {
   song_notes: string | null;
   song_path: string | null;
   status: string;
+  director_plan: unknown;
+  error: string | null;
 };
 
-type Photo = { id: string; storage_path: string; position: number };
+type Photo = {
+  id: string;
+  storage_path: string;
+  styled_path: string | null;
+  style_status: string;
+  position: number;
+};
 
 export default async function MoviePage({
   params,
@@ -41,12 +52,14 @@ export default async function MoviePage({
   const [movieResult, photoResult] = await Promise.all([
     supabase
       .from("projects")
-      .select("id, title, style, aspect_ratio, song_mode, song_mood, song_notes, song_path, status")
+      .select(
+        "id, title, style, aspect_ratio, song_mode, song_mood, song_notes, song_path, status, director_plan, error",
+      )
       .eq("id", id)
       .maybeSingle(),
     supabase
       .from("project_images")
-      .select("id, storage_path, position")
+      .select("id, storage_path, styled_path, style_status, position")
       .eq("project_id", id)
       .order("position", { ascending: true }),
   ]);
@@ -54,13 +67,35 @@ export default async function MoviePage({
   if (!movieResult.data) notFound();
   const movie = movieResult.data as unknown as Movie;
   const photos = (photoResult.data ?? []) as unknown as Photo[];
+  const plan = isPlan(movie.director_plan) ? movie.director_plan : null;
+  const restyles = needsRestyle(movie.style);
 
   const urls = await signedUrlMap(supabase, [
     ...photos.map((p) => p.storage_path),
+    ...photos.flatMap((p) => (p.styled_path ? [p.styled_path] : [])),
     ...(movie.song_path ? [movie.song_path] : []),
   ]);
   const songUrl = movie.song_path ? urls.get(movie.song_path) : undefined;
   const ratio = ratioCss(movie.aspect_ratio);
+  const photoById = new Map(photos.map((p) => [p.id, p]));
+
+  const counts = {
+    total: restyles ? photos.length : 0,
+    done: photos.filter((p) => p.style_status === "done").length,
+    failed: photos.filter((p) => p.style_status === "failed").length,
+    pending: photos.filter((p) => p.style_status === "queued" || p.style_status === "running").length,
+  };
+
+  // Shots follow the plan; photos added after planning are listed at the end.
+  const plannedIds = new Set(plan?.shots.map((s) => s.image_id) ?? []);
+  const shots = plan
+    ? [
+        ...plan.shots.filter((s) => photoById.has(s.image_id)),
+        ...photos
+          .filter((p) => !plannedIds.has(p.id))
+          .map((p) => ({ image_id: p.id, scene: "", motion: "", seconds: 5 })),
+      ]
+    : [];
 
   return (
     <>
@@ -91,58 +126,119 @@ export default async function MoviePage({
           <dd>{movie.song_mode === "ai" ? `New song, ${movie.song_mood ?? "any mood"}` : "Your own song"}</dd>
         </div>
         <div>
-          <dt>Photos</dt>
-          <dd>{photos.length}</dd>
+          <dt>{plan ? "Length" : "Photos"}</dt>
+          <dd>{plan ? `About ${plan.total_seconds} seconds` : photos.length}</dd>
         </div>
       </dl>
-
-      {movie.song_notes && (
-        <p className="hint song-notes">Song should mention: {movie.song_notes}</p>
-      )}
-      {songUrl && (
-        <div className="field">
-          <span className="label">Your song</span>
-          <audio controls src={songUrl} preload="none" />
-        </div>
-      )}
 
       {photos.length === 0 ? (
         <div className="notice error" role="alert">
           This movie has no photos. Delete it below and create a new one.
         </div>
       ) : (
-        <ol className="frames" aria-label="Photos in play order">
-          {photos.map((p, i) => {
-            const src = urls.get(p.storage_path);
-            return (
-              <li key={p.id} className="frame-tile">
-                <div className="frame-media" style={{ aspectRatio: ratio }}>
-                  {src && <img src={src} alt={`Photo ${i + 1}`} />}
-                </div>
-                <div className="frame-bar">
-                  <span className="frame-num">{i + 1}</span>
-                </div>
-              </li>
-            );
-          })}
-        </ol>
+        <MoviePlanner
+          movieId={movie.id}
+          status={movie.status}
+          hasPlan={Boolean(plan)}
+          restyles={restyles}
+          styleName={STYLE_NAME[movie.style] ?? movie.style}
+          counts={counts}
+          error={movie.error}
+        />
       )}
 
-      <section className="generate" aria-labelledby="generate-title">
-        <h2 id="generate-title">Make the movie</h2>
-        <p>
-          FrameSong will plan each scene, animate your photos, make the song, and cut
-          everything to the beat. You’ll watch a preview first, then you can render it in 4K.
-        </p>
-        <div>
-          <button type="button" className="btn btn-primary" disabled>
-            Generate movie
-          </button>
-        </div>
-        <p className="hint">
-          Movie generation arrives in the next update. Your photos and settings are saved.
-        </p>
-      </section>
+      {plan ? (
+        <>
+          <section className="plan" aria-labelledby="plan-title">
+            <h2 id="plan-title">Shots</h2>
+            {plan.logline && <p className="logline">{plan.logline}</p>}
+            <ol className="shots" data-aspect={movie.aspect_ratio}>
+              {shots.map((shot, i) => {
+                const photo = photoById.get(shot.image_id);
+                if (!photo) return null;
+                const original = urls.get(photo.storage_path);
+                const styled = photo.styled_path ? urls.get(photo.styled_path) : undefined;
+                const redrawing = photo.style_status === "queued" || photo.style_status === "running";
+                return (
+                  <li key={shot.image_id} className="shot">
+                    <div className="shot-media" style={{ aspectRatio: ratio }}>
+                      {(styled ?? original) && <img src={styled ?? original} alt={`Shot ${i + 1}`} />}
+                      {styled && original && (
+                        <img className="shot-original" src={original} alt={`Original photo for shot ${i + 1}`} />
+                      )}
+                      {restyles && redrawing && <span className="shot-flag">Redrawing…</span>}
+                      {restyles && photo.style_status === "failed" && (
+                        <span className="shot-flag is-failed">Not redrawn</span>
+                      )}
+                    </div>
+                    <div className="shot-text">
+                      <div className="shot-top">
+                        <span className="shot-num">{i + 1}</span>
+                        <span className="hint">{shot.seconds} seconds</span>
+                      </div>
+                      {shot.scene && <p className="shot-scene">{shot.scene}</p>}
+                      {shot.motion ? (
+                        <p className="shot-motion">
+                          <span className="shot-label">Motion</span> {shot.motion}
+                        </p>
+                      ) : (
+                        <p className="hint">Added after planning. Plan again to include this photo.</p>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+
+          <section className="song-panel" aria-labelledby="song-title">
+            <h2 id="song-title">Song</h2>
+            {movie.song_mode === "ai" ? (
+              <>
+                <h3>{plan.song.title}</h3>
+                <p className="hint">
+                  {plan.song.style ? `${plan.song.style}, ` : ""}
+                  {plan.song.bpm} BPM
+                </p>
+                {plan.song.lyrics && <pre className="lyrics">{plan.song.lyrics}</pre>}
+                {movie.song_notes && <p className="hint">You asked it to mention: {movie.song_notes}</p>}
+              </>
+            ) : (
+              <>
+                <p>Your own song plays over the movie.</p>
+                {songUrl && <audio controls src={songUrl} preload="none" />}
+              </>
+            )}
+          </section>
+        </>
+      ) : (
+        photos.length > 0 && (
+          <section className="plan" aria-labelledby="photos-title">
+            <h2 id="photos-title">Photos</h2>
+            {songUrl && (
+              <div className="field">
+                <span className="label">Your song</span>
+                <audio controls src={songUrl} preload="none" />
+              </div>
+            )}
+            <ol className="frames" aria-label="Photos in play order">
+              {photos.map((p, i) => {
+                const src = urls.get(p.storage_path);
+                return (
+                  <li key={p.id} className="frame-tile">
+                    <div className="frame-media" style={{ aspectRatio: ratio }}>
+                      {src && <img src={src} alt={`Photo ${i + 1}`} />}
+                    </div>
+                    <div className="frame-bar">
+                      <span className="frame-num">{i + 1}</span>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          </section>
+        )
+      )}
 
       <form action={deleteProject} className="danger-zone">
         <input type="hidden" name="id" value={movie.id} />

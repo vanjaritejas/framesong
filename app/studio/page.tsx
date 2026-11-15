@@ -12,14 +12,14 @@ type MovieRow = {
   aspect_ratio: string;
   status: string;
   created_at: string;
-  project_images: { storage_path: string; position: number }[];
+  project_images: { storage_path: string; styled_path: string | null; position: number }[];
 };
 
 export default async function StudioPage() {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("projects")
-    .select("id, title, style, aspect_ratio, status, created_at, project_images(storage_path, position)")
+    .select("id, title, style, aspect_ratio, status, created_at, project_images(storage_path, styled_path, position)")
     .order("created_at", { ascending: false });
 
   if (error) {
@@ -37,8 +37,11 @@ export default async function StudioPage() {
   }
 
   const movies = (data ?? []) as unknown as MovieRow[];
-  const coverOf = (m: MovieRow) =>
-    [...m.project_images].sort((a, b) => a.position - b.position)[0]?.storage_path;
+  // The cover is the first shot, using its redrawn version when there is one.
+  const coverOf = (m: MovieRow) => {
+    const first = [...m.project_images].sort((a, b) => a.position - b.position)[0];
+    return first ? (first.styled_path ?? first.storage_path) : undefined;
+  };
   const urls = await signedUrlMap(
     supabase,
     movies.map(coverOf).filter((p): p is string => Boolean(p)),

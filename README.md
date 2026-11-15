@@ -1,6 +1,6 @@
 # FrameSong
 
-Turn photos into a short film with its own song. This is the Day 1 build.
+Turn photos into a short film with its own song. This build includes Day 1 (website, sign in, uploads) and Day 2 (AI director and photo redraws).
 
 **What works today:** home page, sign in with an email link, and a "New movie" builder where you add up to 20 photos, put them in order, choose a look (real nature, 3D animated, or cartoon), choose a song (a mood for a new song, or upload your own), choose a format (widescreen, vertical, or square), and save it all to private storage. You can see your movies, open each one, and delete them.
 
@@ -144,11 +144,73 @@ Files are stored as `<user id>/<movie id>/<file>` in a private `uploads` bucket.
 
 ---
 
-## Next: Day 2
+## Day 2: the AI director
 
-The AI director: Claude looks at the photos, suggests the best order, writes the camera motion for each shot, and writes song lyrics that fit the story. Cartoon and 3D looks get their redraw step.
+**What's new:** on each movie page, **Plan my movie** sends your photos to Claude. Claude picks the story order (you can turn this off), writes what moves in each shot, sets how long each shot plays, and writes an original song with lyrics. For **cartoon** and **3D animated** movies, every photo is then redrawn in that look by Google's Nano Banana 2 model on fal.ai, and the redrawn shots appear one by one. Big photos are also shrunk in the browser before upload now, so uploads are faster.
 
-Have these ready:
+### Setup
 
-- An Anthropic API key (console.anthropic.com)
-- A fal.ai API key (fal.ai), with a small amount of credit for testing
+1. **Anthropic API key:** sign in to the Claude Console (console.anthropic.com), open **API Keys**, and create a key. Add a little credit under **Billing**. A Claude.ai subscription doesn't include API credit.
+2. **fal.ai key:** sign in at fal.ai, open **Keys** in the dashboard, create a key, and add a little credit under **Billing**.
+3. Add both keys to `.env.local`:
+   ```
+   ANTHROPIC_API_KEY=sk-ant-...
+   FAL_KEY=...
+   ```
+4. Run `supabase/day2.sql` in the Supabase SQL Editor (it adds redraw tracking and the new statuses).
+5. Run `npm install` (new packages: the Anthropic SDK, the fal.ai client, and sharp for resizing photos).
+6. Restart the website with `npm run dev`.
+
+When you deploy, add `ANTHROPIC_API_KEY` and `FAL_KEY` to Vercel's Environment Variables too.
+
+### Day 2 test checklist
+
+- [ ] Open a movie and select **Plan my movie**: within about a minute you see shots with motion notes and a song with lyrics
+- [ ] A **Real nature** movie goes straight to "Plan ready" (no redrawing)
+- [ ] A **Cartoon** or **3D animated** movie shows "Redrawing photos: 0 of N done," and redrawn shots appear one by one, with the original photo in the corner
+- [ ] Turn off **Let Claude choose the photo order**, select **Plan again**, and the shots keep your order
+- [ ] **Plan again** doesn't redraw photos that are already redrawn
+
+### What it costs (roughly)
+
+- Planning with Claude Sonnet: a few cents per plan.
+- Redrawing (cartoon and 3D only): about $0.08 per photo at the "1K" setting, so a 10-photo movie is about $0.80. Real nature movies skip this.
+
+To change quality and price, edit `RESTYLE_RESOLUTION` in `lib/restyle.ts` ("2K" is sharper and costs 1.5×) or `DIRECTOR_MODEL` in `lib/director.ts`.
+
+### If something goes wrong (Day 2)
+
+**"ANTHROPIC_API_KEY is missing" or "FAL_KEY is missing"**
+The key isn't in `.env.local`, or the website wasn't restarted after adding it. Press Ctrl + C in the terminal, then run `npm run dev` again.
+
+**"Your Anthropic account is out of API credits" / "Your fal.ai account is out of credit"**
+Add credit in that service's Billing page, then try again.
+
+**"An API key was rejected"**
+A key was copied incompletely. Copy it again into `.env.local` and restart.
+
+**Some photos say "Not redrawn"**
+Select **Redraw N photos** on the movie page. The model occasionally refuses or fails on a single photo.
+
+**A database error mentioning "style_status" or "check constraint"**
+`supabase/day2.sql` hasn't been run yet.
+
+### New files
+
+```
+lib/director.ts                     Sends photos to Claude and checks its plan
+lib/restyle.ts                      Starts and collects redraws on fal.ai
+lib/plan.ts                         The shape of a saved plan
+lib/errors.ts, lib/server-env.ts    Friendly errors, secret key checks
+app/api/movies/[id]/plan            Plans a movie (Claude), then starts redraws
+app/api/movies/[id]/progress        Collects finished redraws
+app/api/movies/[id]/restyle         Retries failed redraws
+components/MoviePlanner.tsx         The planning panel on the movie page
+supabase/day2.sql                   Database update for Day 2
+```
+
+---
+
+## Next: Day 3
+
+Animation: each shot becomes a moving clip with an image-to-video model on fal.ai, using the motion Claude wrote, with a live progress view.

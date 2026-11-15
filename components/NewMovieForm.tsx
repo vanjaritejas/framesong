@@ -51,6 +51,38 @@ const STATUS_TEXT: Record<UploadStatus, string> = {
   failed: "Upload failed",
 };
 
+// Phone photos can be 8–15 MB. Shrinking to 2560 px on the long edge keeps them sharp
+// enough for a 4K movie while making uploads much faster and saving storage space.
+const MAX_EDGE = 2560;
+
+async function shrinkPhoto(file: File): Promise<{ body: Blob; type: string; ext: string }> {
+  const original = { body: file as Blob, type: file.type, ext: IMAGE_EXT[file.type] ?? "jpg" };
+  try {
+    // "from-image" keeps phone photos the right way up.
+    const options = { imageOrientation: "from-image" } as unknown as ImageBitmapOptions;
+    const bitmap = await createImageBitmap(file, options);
+    const scale = Math.min(1, MAX_EDGE / Math.max(bitmap.width, bitmap.height));
+    if (scale === 1 && file.size <= 3 * 1024 * 1024) {
+      bitmap.close();
+      return original;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      return original;
+    }
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+    return blob ? { body: blob, type: "image/jpeg", ext: "jpg" } : original;
+  } catch {
+    return original; // Older browsers: upload the photo as it is.
+  }
+}
+
 function readSize(url: string): Promise<{ width: number; height: number }> {
   return new Promise((resolve) => {
     const img = new Image();
@@ -240,12 +272,13 @@ export default function NewMovieForm() {
 
       await runPool(pending, 3, async (p) => {
         setStatus(p.id, "uploading");
-        const path = `${user.id}/${id}/${p.id}.${IMAGE_EXT[p.file.type] ?? "jpg"}`;
+        const prepared = await shrinkPhoto(p.file);
+        const path = `${user.id}/${id}/${p.id}.${prepared.ext}`;
         let ok = false;
         for (let attempt = 0; attempt < 3 && !ok; attempt++) {
           const { error } = await supabase.storage
             .from(BUCKET)
-            .upload(path, p.file, { contentType: p.file.type, upsert: true });
+            .upload(path, prepared.body, { contentType: prepared.type, upsert: true });
           ok = !error;
         }
         if (ok) {

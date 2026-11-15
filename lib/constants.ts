@@ -21,6 +21,11 @@ export const STYLES = [
 
 export type StyleId = (typeof STYLES)[number]["id"];
 
+// Cartoon and 3D movies redraw every photo before animating; real nature keeps them.
+export function needsRestyle(style: StyleId) {
+  return style === "animated_3d" || style === "cartoon";
+}
+
 export const STYLE_NAME = Object.fromEntries(
   STYLES.map((s) => [s.id, s.name]),
 ) as Record<StyleId, string>;
@@ -49,7 +54,9 @@ export const MOODS: string[] = [
 
 export const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
-  directing: "Planning scenes",
+  directing: "Planning",
+  styling: "Redrawing photos",
+  planned: "Plan ready",
   generating: "Animating",
   editing: "Editing to the song",
   preview_ready: "Preview ready",

@@ -9,11 +9,14 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "latest",
+    "@fal-ai/client": "latest",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.49.4",
     "next": "^16.0.10",
     "react": "^19.2.3",
-    "react-dom": "^19.2.3"
+    "react-dom": "^19.2.3",
+    "sharp": "latest"
   },
   "devDependencies": {
     "@types/node": "^22",
