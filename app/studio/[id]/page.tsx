@@ -3,9 +3,10 @@ import { notFound } from "next/navigation";
 import DeleteMovieButton from "@/components/DeleteMovieButton";
 import MoviePlanner from "@/components/MoviePlanner";
 import { createClient } from "@/lib/supabase/server";
-import { signedUrlMap } from "@/lib/storage";
+import { BUCKET, signedUrlMap } from "@/lib/storage";
 import { isPlan } from "@/lib/plan";
-import { estimateClips } from "@/lib/video";
+import { clipSecondsFor, estimateClips } from "@/lib/video";
+import { cutLengths, estimateEdit, totalSeconds } from "@/lib/timeline";
 import {
   ASPECT_NAME,
   STATUS_LABELS,
@@ -31,6 +32,12 @@ type Movie = {
   status: string;
   director_plan: unknown;
   error: string | null;
+  song_status: string;
+  ai_song_path: string | null;
+  ai_song_seconds: number | null;
+  edit_status: string;
+  preview_path: string | null;
+  preview_url: string | null;
 };
 
 type Photo = {
@@ -40,6 +47,7 @@ type Photo = {
   style_status: string;
   clip_path: string | null;
   clip_status: string;
+  clip_seconds: number | null;
   position: number;
 };
 
@@ -56,13 +64,13 @@ export default async function MoviePage({
     supabase
       .from("projects")
       .select(
-        "id, title, style, aspect_ratio, song_mode, song_mood, song_notes, song_path, status, director_plan, error",
+        "id, title, style, aspect_ratio, song_mode, song_mood, song_notes, song_path, status, director_plan, error, song_status, ai_song_path, ai_song_seconds, edit_status, preview_path, preview_url",
       )
       .eq("id", id)
       .maybeSingle(),
     supabase
       .from("project_images")
-      .select("id, storage_path, styled_path, style_status, clip_path, clip_status, position")
+      .select("id, storage_path, styled_path, style_status, clip_path, clip_status, clip_seconds, position")
       .eq("project_id", id)
       .order("position", { ascending: true }),
   ]);
@@ -78,8 +86,23 @@ export default async function MoviePage({
     ...photos.flatMap((p) => (p.styled_path ? [p.styled_path] : [])),
     ...photos.flatMap((p) => (p.clip_path && p.clip_status === "done" ? [p.clip_path] : [])),
     ...(movie.song_path ? [movie.song_path] : []),
+    ...(movie.ai_song_path && movie.song_status === "done" ? [movie.ai_song_path] : []),
+    ...(movie.preview_path ? [movie.preview_path] : []),
   ]);
   const songUrl = movie.song_path ? urls.get(movie.song_path) : undefined;
+  const aiSongUrl =
+    movie.ai_song_path && movie.song_status === "done" ? urls.get(movie.ai_song_path) : undefined;
+
+  // The finished movie, with a separate link that downloads it with a friendly file name.
+  const movieUrl = movie.preview_path ? urls.get(movie.preview_path) : (movie.preview_url ?? undefined);
+  let downloadUrl: string | undefined = movie.preview_url ?? undefined;
+  if (movie.preview_path) {
+    const fileName = `${movie.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase() || "framesong"}.mp4`;
+    const { data } = await supabase.storage
+      .from(BUCKET)
+      .createSignedUrl(movie.preview_path, 3600, { download: fileName });
+    downloadUrl = data?.signedUrl;
+  }
   const ratio = ratioCss(movie.aspect_ratio);
   const photoById = new Map(photos.map((p) => [p.id, p]));
 
@@ -113,6 +136,27 @@ export default async function MoviePage({
   const estimate = estimateClips(
     shots.filter((s) => photoById.get(s.image_id)?.clip_status !== "done").map((s) => s.seconds),
   );
+
+  // Cost estimate for making the finished movie from the clips that exist.
+  const editable = shots.filter((s) => photoById.get(s.image_id)?.clip_status === "done");
+  const editLengths = cutLengths(
+    editable.map((s) => ({
+      seconds: s.seconds,
+      clipSeconds: photoById.get(s.image_id)?.clip_seconds ?? clipSecondsFor(s.seconds),
+    })),
+    movie.song_mode === "ai" && plan ? plan.song.bpm : null,
+  );
+  const movieSeconds = totalSeconds(editLengths);
+  const songFits =
+    movie.song_status === "done" && Boolean(movie.ai_song_path) && (movie.ai_song_seconds ?? 0) >= movieSeconds - 0.5;
+  const editEstimate = estimateEdit(movieSeconds, movie.song_mode === "ai" && !songFits);
+  const newSongEstimate = estimateEdit(movieSeconds, movie.song_mode === "ai");
+  const editStage =
+    movie.status !== "editing"
+      ? null
+      : movie.song_status === "queued" || movie.song_status === "running"
+        ? ("song" as const)
+        : ("edit" as const);
 
   return (
     <>
@@ -148,6 +192,30 @@ export default async function MoviePage({
         </div>
       </dl>
 
+      {movieUrl && (
+        <section className="movie-player" aria-labelledby="movie-title">
+          <h2 id="movie-title">Your movie</h2>
+          <video
+            src={movieUrl}
+            controls
+            playsInline
+            preload="metadata"
+            style={{ aspectRatio: ratio }}
+            aria-label={`${movie.title}, the finished movie`}
+          />
+          <div className="planner-actions">
+            {downloadUrl && (
+              <a className="btn btn-primary" href={downloadUrl} download>
+                Download the movie
+              </a>
+            )}
+          </div>
+          {movie.status === "editing" && (
+            <p className="hint">A new edit is being made. This is the previous version.</p>
+          )}
+        </section>
+      )}
+
       {photos.length === 0 ? (
         <div className="notice error" role="alert">
           This movie has no photos. Delete it below and create a new one.
@@ -163,6 +231,11 @@ export default async function MoviePage({
           clipCounts={clipCounts}
           canAnimate={canAnimate}
           estimate={estimate}
+          songMode={movie.song_mode}
+          editEstimate={editEstimate}
+          newSongEstimate={newSongEstimate}
+          editStage={editStage}
+          hasMovie={Boolean(movieUrl)}
           error={movie.error}
         />
       )}
@@ -247,6 +320,7 @@ export default async function MoviePage({
                   {plan.song.style ? `${plan.song.style}, ` : ""}
                   {plan.song.bpm} BPM
                 </p>
+                {aiSongUrl && <audio controls src={aiSongUrl} preload="none" aria-label="The song" />}
                 {plan.song.lyrics && <pre className="lyrics">{plan.song.lyrics}</pre>}
                 {movie.song_notes && <p className="hint">You asked it to mention: {movie.song_notes}</p>}
               </>

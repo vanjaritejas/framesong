@@ -1,6 +1,6 @@
 # FrameSong
 
-Turn photos into a short film with its own song. This build includes Day 1 (website, sign in, uploads), Day 2 (AI director and photo redraws), and Day 3 (animated clips).
+Turn photos into a short film with its own song. This build includes Day 1 (website, sign in, uploads), Day 2 (AI director and photo redraws), Day 3 (animated clips), and Day 4 (the song and the edit).
 
 **What works today:** home page, sign in with an email link, and a "New movie" builder where you add up to 20 photos, put them in order, choose a look (real nature, 3D animated, or cartoon), choose a song (a mood for a new song, or upload your own), choose a format (widescreen, vertical, or square), and save it all to private storage. You can see your movies, open each one, and delete them.
 
@@ -253,7 +253,7 @@ The video model sometimes refuses a picture (often a safety filter on faces) or 
 Cartoon and 3D movies animate the redrawn photos. Select **Redraw N photos** first.
 
 **Square movies**
-Veo makes 16:9 and 9:16 clips, so square movies get 16:9 clips. They're cropped to square in the final edit.
+Veo makes 16:9 and 9:16 clips, so square movies get 16:9 clips that the edit crops to square.
 
 ### New files
 
@@ -267,6 +267,68 @@ supabase/day3.sql                   Database update for Day 3
 
 ---
 
-## Next: Day 4
+## Day 4: the song and the edit
 
-The song and the edit: a new song made from Claude's lyrics (or your own song), then the clips cut to the beat and joined into one movie you can watch.
+**What's new:** once the clips are made, **Make the movie** turns them into one finished video. For new-song movies, MiniMax Music 3 on fal.ai first sings Claude's lyrics at the plan's tempo, and every cut is a whole number of beats so the shots change on the beat. Movies with your own song use the shot lengths from the plan. Then FFmpeg, running on your own server (your computer while testing, Vercel when live), lines the clips up in order, trims each one, fills the frame for the movie's format, and lays the song underneath with a short fade at the end. If the song is shorter than the movie, the cuts are shortened a little so the movie ends with the song. The movie plays at the top of the movie page with a **Download the movie** button, and the new song gets its own player in the Song section.
+
+### Setup
+
+1. Run `supabase/day4.sql` in the Supabase SQL Editor (it adds song and edit tracking to movies).
+2. Run `npm install`. It adds `ffmpeg-static`, which downloads the FFmpeg program used for the edit.
+3. Restart the website with `npm run dev`.
+
+### Day 4 test checklist
+
+- [ ] On a movie with **Clips ready**, select **Make the movie**: a box shows the length and cost first
+- [ ] A new-song movie shows "Making the song," then "Editing"; a your-own-song movie goes straight to "Editing"
+- [ ] The finished movie appears at the top of the page and plays with the song
+- [ ] **Download the movie** saves an MP4 named after the movie
+- [ ] **Edit again** reuses the same song; **Make a new song** makes a fresh one
+- [ ] **Plan again** asks before clearing the clips, the song, and the movie
+
+### What it costs (roughly)
+
+- The song: about $0.002 per second, so a 30-second song is about $0.06.
+- The edit: free. It runs on your own server, not on fal.ai.
+
+To change the music model, edit `SONG_MODEL` in `lib/edit.ts` and update `SONG_PRICE_PER_SECOND` in `lib/timeline.ts`.
+
+### If something goes wrong (Day 4)
+
+**A database error mentioning "song_status," "edit_status," or "edit_plan"**
+`supabase/day4.sql` hasn't been run yet.
+
+**"The song couldn't be made"**
+The music model sometimes refuses lyrics or fails once. Select **Make the movie** again. If it keeps failing, select **Plan again** for new lyrics.
+
+**"FFmpeg isn't installed"**
+Stop the website (Ctrl + C), run `npm install`, and start it again with `npm run dev`.
+
+**"The finished movie is bigger than 50 MB"**
+Supabase's free plan stores files up to 50 MB. Try a movie with fewer shots.
+
+**The edit stops partway on the live site**
+Editing happens while the movie page is open, so keep it open until the movie appears.
+
+**The cuts don't line up perfectly with your own song**
+For your own songs, FrameSong doesn't know the tempo yet, so cuts follow the plan's shot lengths.
+
+**Square movies**
+The clips are 16:9, so square movies are cropped from the middle of each clip.
+
+### New files
+
+```
+lib/timeline.ts                     Cut lengths on the beat, and the cost estimate
+lib/edit.ts                         Makes the song on fal.ai
+lib/render.ts                       Makes the finished movie with FFmpeg on your server
+app/api/movies/[id]/edit            Starts the song and the edit
+app/api/movies/[id]/edit-progress   Follows the song, runs the edit, and saves the movie
+supabase/day4.sql                   Database update for Day 4
+```
+
+---
+
+## Next: Day 5
+
+4K: the finished movie is upscaled to 4K for a sharp download.

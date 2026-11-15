@@ -1,7 +1,7 @@
 -- FrameSong database setup
 -- Run once in Supabase: SQL Editor > New query > paste this whole file > Run.
 -- Safe to run again: it skips or replaces what already exists.
--- Already ran an older version of this file? Also run day2.sql and day3.sql.
+-- Already ran an older version of this file? Also run day2.sql, day3.sql, and day4.sql.
 
 -- ─────────────────────────────────────────────
 -- Movies
@@ -21,7 +21,19 @@ create table if not exists public.projects (
                              'editing', 'preview_ready', 'rendering_4k', 'done', 'failed')
                 ),
   director_plan jsonb,                -- Day 2: scene order, motion prompts, lyrics
-  preview_path  text,                 -- Day 4: 1080p preview video
+  song_status   text not null default 'none' check (
+                  song_status in ('none', 'queued', 'running', 'done', 'failed')
+                ),                    -- Day 4: the AI song
+  song_request_id text,               -- Day 4: fal.ai job for the song
+  ai_song_path  text,                 -- Day 4: the AI song file
+  ai_song_seconds real,               -- Day 4: how long the AI song is
+  edit_status   text not null default 'none' check (
+                  edit_status in ('none', 'queued', 'running', 'done', 'failed')
+                ),                    -- Day 4: the final edit
+  edit_request_id text,               -- Day 4: fal.ai job for the edit
+  edit_plan     jsonb,                -- Day 4: the exact cuts used
+  preview_path  text,                 -- Day 4: the finished movie in storage
+  preview_url   text,                 -- Day 4: fal.ai link, if the movie was too big to store
   final_path    text,                 -- Day 5: 4K video
   error         text,
   created_at    timestamptz not null default now(),

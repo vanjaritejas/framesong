@@ -20,3 +20,26 @@ export function friendlyError(err: unknown): string {
   if (status === 529 || status === 503) return "Claude is busy right now. Try again in a minute.";
   return message || "Something went wrong. Try again.";
 }
+
+// fal.ai puts the real reason for a failed job in the error's body, not its message.
+export function falErrorMessage(err: unknown, fallback: string): string {
+  const body =
+    typeof err === "object" && err !== null && "body" in err ? (err as { body?: unknown }).body : undefined;
+  const detail =
+    typeof body === "object" && body !== null && "detail" in body ? (body as { detail?: unknown }).detail : body;
+
+  let text = "";
+  if (typeof detail === "string") {
+    text = detail;
+  } else if (Array.isArray(detail)) {
+    text = detail
+      .map((d) =>
+        typeof d === "object" && d !== null && "msg" in d ? String((d as { msg: unknown }).msg) : JSON.stringify(d),
+      )
+      .join("; ");
+  } else if (detail) {
+    text = JSON.stringify(detail);
+  }
+  if (!text && err instanceof Error) text = err.message;
+  return (text || fallback).slice(0, 300);
+}

@@ -53,8 +53,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (inProgress && Date.now() - new Date(movie.updated_at).getTime() < STALE_MS) {
     return NextResponse.json({ error: "This movie is already being planned. Wait for it to finish." }, { status: 409 });
   }
-  if (movie.status === "generating" && Date.now() - new Date(movie.updated_at).getTime() < 4 * STALE_MS) {
-    return NextResponse.json({ error: "Wait for the clips to finish before planning again." }, { status: 409 });
+  if (
+    (movie.status === "generating" || movie.status === "editing") &&
+    Date.now() - new Date(movie.updated_at).getTime() < 4 * STALE_MS
+  ) {
+    return NextResponse.json({ error: "Wait for the clips and the edit to finish before planning again." }, { status: 409 });
   }
 
   const { data: photoData } = await supabase
@@ -67,7 +70,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Add at least 3 photos before planning the movie." }, { status: 400 });
   }
 
-  const previousStatus = inProgress ? "draft" : movie.status === "generating" ? "planned" : movie.status;
+  const previousStatus = inProgress
+    ? "draft"
+    : movie.status === "generating" || movie.status === "editing"
+      ? "planned"
+      : movie.status;
   await supabase.from("projects").update({ status: "directing", error: null }).eq("id", id);
 
   try {
@@ -121,6 +128,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         title: movie.title === "Untitled movie" && plan.title ? plan.title : movie.title,
         status: todo.length > 0 ? "styling" : "planned",
         error: null,
+        // A new plan has new lyrics and shots, so the old song and finished movie are cleared.
+        song_status: "none",
+        song_request_id: null,
+        ai_song_path: null,
+        ai_song_seconds: null,
+        edit_status: "none",
+        edit_request_id: null,
+        edit_plan: null,
+        preview_path: null,
+        preview_url: null,
       })
       .eq("id", id);
     if (saveError) throw new Error(`The plan couldn't be saved: ${saveError.message}`);

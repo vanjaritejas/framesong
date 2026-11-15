@@ -1,6 +1,7 @@
 import { fal } from "@fal-ai/client";
 import sharp from "sharp";
 import { requireEnv } from "@/lib/server-env";
+import { falErrorMessage } from "@/lib/errors";
 import { BUCKET, signedUrlMap } from "@/lib/storage";
 import { clipSecondsFor } from "@/lib/video";
 import type { AspectId, StyleId } from "@/lib/constants";
@@ -139,7 +140,7 @@ export async function submitClips(supabase: ServerSupabase, movie: MovieInfo, jo
           .eq("id", job.id);
         return true;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
+        const message = falErrorMessage(err, "The clip couldn't be started.");
         firstError ??= message;
         await supabase
           .from("project_images")
@@ -171,7 +172,6 @@ export async function checkClip(requestId: string): Promise<ClipCheck> {
     return { state: "done", url: data.video.url };
   } catch (err) {
     // Usually the model's safety filter refusing a picture, or a temporary model error.
-    const message = err instanceof Error ? err.message : String(err);
-    return { state: "failed", reason: message || "The video model couldn't make this clip." };
+    return { state: "failed", reason: falErrorMessage(err, "The video model couldn't make this clip.") };
   }
 }

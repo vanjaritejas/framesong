@@ -53,8 +53,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const plan = isPlan(movie.director_plan) ? movie.director_plan : null;
   if (!plan) return NextResponse.json({ error: "Plan the movie first, then animate it." }, { status: 400 });
 
-  if (movie.status === "directing" || movie.status === "styling") {
-    return NextResponse.json({ error: "Wait for planning and redrawing to finish." }, { status: 409 });
+  if (movie.status === "directing" || movie.status === "styling" || movie.status === "editing") {
+    return NextResponse.json({ error: "Wait for planning, redrawing, or editing to finish." }, { status: 409 });
   }
   const recent = Date.now() - new Date(movie.updated_at).getTime() < STALE_MS;
   if (movie.status === "generating" && recent) {

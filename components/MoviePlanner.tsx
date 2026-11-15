@@ -3,9 +3,11 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { ClipEstimate } from "@/lib/video";
+import type { EditEstimate } from "@/lib/timeline";
 
 type Counts = { total: number; done: number; failed: number; pending: number };
-type Phase = "idle" | "planning" | "styling" | "ready" | "animating" | "animated";
+type Phase = "idle" | "planning" | "styling" | "ready" | "animating" | "animated" | "editing" | "finished";
+type EditStage = "song" | "edit";
 
 type Props = {
   movieId: string;
@@ -17,6 +19,11 @@ type Props = {
   clipCounts: Counts; // video clips
   canAnimate: boolean; // every photo is redrawn (or the look doesn't need redraws)
   estimate: ClipEstimate; // for the shots that don't have a finished clip yet
+  songMode: "ai" | "upload";
+  editEstimate: EditEstimate; // making the movie (reuses the last song when it fits)
+  newSongEstimate: EditEstimate; // making the movie with a fresh song
+  editStage: EditStage | null; // what's running right now, if editing
+  hasMovie: boolean; // a finished movie exists
   error: string | null;
 };
 
@@ -25,11 +32,17 @@ function phaseFor(status: string, hasPlan: boolean): Phase {
   if (status === "styling") return "styling";
   if (status === "generating") return "animating";
   if (status === "animated") return "animated";
+  if (status === "editing") return "editing";
+  if (status === "preview_ready") return "finished";
   return hasPlan ? "ready" : "idle";
 }
 
 function plural(n: number, word: string) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function creditText(dollars: number) {
+  return dollars > 0 ? `about $${dollars.toFixed(2)} of fal.ai credit` : "no fal.ai credit";
 }
 
 // Checks a progress endpoint every few seconds until nothing is pending.
@@ -94,6 +107,11 @@ export default function MoviePlanner({
   clipCounts: initialClipCounts,
   canAnimate,
   estimate,
+  songMode,
+  editEstimate,
+  newSongEstimate,
+  editStage: initialEditStage,
+  hasMovie,
   error,
 }: Props) {
   const router = useRouter();
@@ -103,6 +121,7 @@ export default function MoviePlanner({
   const [reorder, setReorder] = useState(true);
   const [message, setMessage] = useState<string | null>(error);
   const [requesting, setRequesting] = useState(false);
+  const [editStage, setEditStage] = useState<EditStage>(initialEditStage ?? "song");
   const doneRef = useRef(initialCounts.done);
   const clipDoneRef = useRef(initialClipCounts.done);
 
@@ -170,11 +189,50 @@ export default function MoviePlanner({
     setMessage,
   );
 
+  useEffect(() => {
+    if (initialEditStage) setEditStage(initialEditStage);
+  }, [initialEditStage]);
+
+  // While the song and the edit are being made, check every few seconds.
+  useEffect(() => {
+    if (phase !== "editing") return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    async function tick() {
+      let keepGoing = true;
+      try {
+        const res = await fetch(`/api/movies/${movieId}/edit-progress`, { method: "POST" });
+        const data = (await res.json()) as { stage?: string; error?: string };
+        if (stopped) return;
+        if (!res.ok) {
+          setMessage(data.error ?? "Progress couldn't be checked. Reload the page to try again.");
+        } else if (data.stage === "song" || data.stage === "edit") {
+          setEditStage(data.stage);
+        } else {
+          keepGoing = false;
+          if (data.stage === "done") setPhase("finished");
+          if (data.stage === "failed") setMessage(data.error ?? "The movie couldn't be made. Try again.");
+          router.refresh();
+        }
+      } catch {
+        // Connection hiccup: try again on the next tick.
+      }
+      if (!stopped && keepGoing) timer = setTimeout(tick, 5000);
+    }
+
+    tick();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [phase, movieId, router]);
+
   async function planMovie() {
     if (
-      clipCounts.done > 0 &&
+      (clipCounts.done > 0 || hasMovie) &&
       !window.confirm(
-        "Planning again clears the clips you've made, and animating again uses fal.ai credit again. Plan again?",
+        "Planning again clears the clips, the song, and the finished movie. Making them again uses fal.ai credit again. Plan again?",
       )
     ) {
       return;
@@ -263,9 +321,46 @@ export default function MoviePlanner({
     }
   }
 
+  async function makeMovie(newSong: boolean) {
+    const est = newSong ? newSongEstimate : editEstimate;
+    const what = est.makesSong ? "Make the song and edit the movie" : "Edit the movie with the song";
+    const question = `${what}? The movie is about ${est.movieSeconds} seconds long, and this uses ${creditText(est.dollars)}.`;
+    if (!window.confirm(question)) return;
+
+    setRequesting(true);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/movies/${movieId}/edit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newSong }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string; stage?: EditStage };
+      if (!res.ok) {
+        setMessage(data.error ?? "The movie couldn't be started. Try again.");
+        router.refresh();
+        return;
+      }
+      setEditStage(data.stage ?? "song");
+      setPhase("editing");
+      router.refresh();
+    } catch {
+      setMessage("The connection dropped. Reload the page to see whether the edit started.");
+    } finally {
+      setRequesting(false);
+    }
+  }
+
   const finishedRedraws = counts.done + counts.failed;
   const finishedClips = clipCounts.done + clipCounts.failed;
   const costText = `about $${estimate.dollars.toFixed(2)} of fal.ai credit`;
+  const editCost = creditText(editEstimate.dollars);
+  const retryButton =
+    clipCounts.failed > 0 ? (
+      <button type="button" className="btn btn-quiet" onClick={() => animate(true)} disabled={requesting}>
+        Try again ({plural(clipCounts.failed, "shot")})
+      </button>
+    ) : null;
 
   const reorderBox = (
     <label className="check">
@@ -383,21 +478,66 @@ export default function MoviePlanner({
           </p>
           {reorderBox}
           <div className="planner-actions">
-            {clipCounts.failed > 0 && (
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={() => animate(true)}
-                disabled={requesting}
-              >
-                Try again ({plural(clipCounts.failed, "shot")})
-              </button>
-            )}
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => makeMovie(false)}
+              disabled={requesting || clipCounts.done < 2}
+            >
+              Make the movie
+            </button>
+            {retryButton}
             <button type="button" className="btn btn-quiet" onClick={planMovie} disabled={requesting}>
               Plan again
             </button>
           </div>
-          <p className="hint">Next update: the song and the final edit, cut to the beat.</p>
+          <p className="hint">
+            {editEstimate.makesSong
+              ? `Makes a new song from the lyrics, then cuts the clips to its beat. This uses ${editCost}.`
+              : `Cuts the clips together with ${songMode === "ai" ? "the song" : "your song"}. The edit runs on your own server, so it uses ${editCost}.`}
+            {clipCounts.failed > 0 && " Shots without a clip are left out."}
+          </p>
+        </>
+      )}
+
+      {phase === "editing" && (
+        <>
+          <p role="status" className="working">
+            {editStage === "song"
+              ? "Making the song: the music model is singing your lyrics. This takes a minute or two."
+              : "Editing: cutting the clips to the music and laying the song underneath. This takes about a minute, so keep this page open."}
+          </p>
+          <ol className="edit-steps" aria-label="Steps">
+            {songMode === "ai" && (
+              <li data-state={editStage === "song" ? "active" : "done"}>Make the song</li>
+            )}
+            <li data-state={editStage === "edit" ? "active" : "waiting"}>Cut the clips and add the song</li>
+          </ol>
+        </>
+      )}
+
+      {phase === "finished" && (
+        <>
+          <p>Your movie is ready. Watch it at the top of the page.</p>
+          {reorderBox}
+          <div className="planner-actions">
+            <button type="button" className="btn btn-quiet" onClick={() => makeMovie(false)} disabled={requesting}>
+              Edit again
+            </button>
+            {songMode === "ai" && (
+              <button type="button" className="btn btn-quiet" onClick={() => makeMovie(true)} disabled={requesting}>
+                Make a new song
+              </button>
+            )}
+            {retryButton}
+            <button type="button" className="btn btn-quiet" onClick={planMovie} disabled={requesting}>
+              Plan again
+            </button>
+          </div>
+          <p className="hint">
+            Edit again reuses the same song and uses {creditText(editEstimate.dollars)}.
+            {songMode === "ai" && ` A new song uses ${creditText(newSongEstimate.dollars)}.`} Next update: 4K.
+          </p>
         </>
       )}
 
