@@ -1,6 +1,6 @@
 # FrameSong
 
-Turn photos into a short film with its own song. This build includes Day 1 (website, sign in, uploads) and Day 2 (AI director and photo redraws).
+Turn photos into a short film with its own song. This build includes Day 1 (website, sign in, uploads), Day 2 (AI director and photo redraws), and Day 3 (animated clips).
 
 **What works today:** home page, sign in with an email link, and a "New movie" builder where you add up to 20 photos, put them in order, choose a look (real nature, 3D animated, or cartoon), choose a song (a mood for a new song, or upload your own), choose a format (widescreen, vertical, or square), and save it all to private storage. You can see your movies, open each one, and delete them.
 
@@ -211,6 +211,62 @@ supabase/day2.sql                   Database update for Day 2
 
 ---
 
-## Next: Day 3
+## Day 3: animated clips
 
-Animation: each shot becomes a moving clip with an image-to-video model on fal.ai, using the motion Claude wrote, with a live progress view.
+**What's new:** once a movie is planned (and, for cartoon and 3D, every photo is redrawn), **Animate movie** turns each shot into a short video clip with Google's Veo 3.1 Lite model on fal.ai. Each clip starts from the shot's image (the redrawn one for cartoon and 3D) and follows the motion Claude wrote. A progress bar counts the finished clips, and each one plays on the movie page. Clips are saved in your private Supabase storage.
+
+### Setup
+
+1. Run `supabase/day3.sql` in the Supabase SQL Editor (it adds clip tracking, the "Clips ready" status, and lets storage hold MP4 videos).
+2. Restart the website with `npm run dev`. No new packages or keys are needed.
+
+### Day 3 test checklist
+
+- [ ] On a planned movie with 3 or 4 shots, select **Animate movie**: a box shows the clip count and estimated cost before anything is spent
+- [ ] The panel shows "Animating shots: 0 of N done," and shots show **Animating…**
+- [ ] Clips appear one by one (each takes a minute or two) and play on the movie page
+- [ ] When all are done, the badge says **Clips ready**
+- [ ] Leave the page while animating, come back, and it picks up where it left off
+- [ ] If a shot says **Not animated**, **Try again** remakes only the failed shots
+- [ ] **Plan again** asks before clearing the clips
+
+### What it costs (roughly)
+
+- Veo 3.1 Lite at 720p without audio: about $0.03 per second of video.
+- Clips are 4, 6, or 8 seconds: each shot gets the shortest clip at least as long as the plan says, so the edit can cut it to the beat on Day 4. A 5-second shot becomes a 6-second clip (about $0.18).
+- A 4-shot movie is usually under $1. A 20-shot movie can be up to about $4.80.
+
+To change the model or quality, edit `VIDEO_MODEL` and `VIDEO_RESOLUTION` in `lib/animate.ts`, then update `VIDEO_PRICE_PER_SECOND` in `lib/video.ts` so the cost estimate stays right.
+
+### If something goes wrong (Day 3)
+
+**A database error mentioning "clip_request_id," "clip_seconds," or "check constraint"**
+`supabase/day3.sql` hasn't been run yet. Run it, then try again.
+
+**Clips are made but say "couldn't be saved," mentioning "mime type" or "size"**
+Storage doesn't accept videos yet. Run `supabase/day3.sql`.
+
+**Some shots say "Not animated"**
+The video model sometimes refuses a picture (often a safety filter on faces) or fails once. Select **Try again**. If the same shot keeps failing, plan again or use a different photo.
+
+**"Some photos aren't redrawn yet"**
+Cartoon and 3D movies animate the redrawn photos. Select **Redraw N photos** first.
+
+**Square movies**
+Veo makes 16:9 and 9:16 clips, so square movies get 16:9 clips. They're cropped to square in the final edit.
+
+### New files
+
+```
+lib/video.ts                        Clip lengths and the cost estimate
+lib/animate.ts                      Starts and collects video clips on fal.ai
+app/api/movies/[id]/animate         Starts animating (or retries failed shots)
+app/api/movies/[id]/clips           Collects finished clips into storage
+supabase/day3.sql                   Database update for Day 3
+```
+
+---
+
+## Next: Day 4
+
+The song and the edit: a new song made from Claude's lyrics (or your own song), then the clips cut to the beat and joined into one movie you can watch.

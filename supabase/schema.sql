@@ -1,7 +1,7 @@
 -- FrameSong database setup
 -- Run once in Supabase: SQL Editor > New query > paste this whole file > Run.
 -- Safe to run again: it skips or replaces what already exists.
--- Already ran an older version of this file? Also run day2.sql.
+-- Already ran an older version of this file? Also run day2.sql and day3.sql.
 
 -- ─────────────────────────────────────────────
 -- Movies
@@ -17,7 +17,7 @@ create table if not exists public.projects (
   song_notes    text check (song_notes is null or char_length(song_notes) <= 500),
   song_path     text,                 -- the user's own song file, if they uploaded one
   status        text not null default 'draft' check (
-                  status in ('draft', 'directing', 'styling', 'planned', 'generating',
+                  status in ('draft', 'directing', 'styling', 'planned', 'generating', 'animated',
                              'editing', 'preview_ready', 'rendering_4k', 'done', 'failed')
                 ),
   director_plan jsonb,                -- Day 2: scene order, motion prompts, lyrics
@@ -49,6 +49,9 @@ create table if not exists public.project_images (
   clip_status   text not null default 'pending' check (
                   clip_status in ('pending', 'queued', 'running', 'done', 'failed')
                 ),
+  clip_request_id text,               -- Day 3: fal.ai job for the clip
+  clip_seconds  int,                  -- Day 3: clip length (4, 6 or 8 seconds)
+  clip_error    text,                 -- Day 3: why a clip failed
   created_at    timestamptz not null default now()
 );
 
@@ -98,16 +101,17 @@ create policy "Users manage photos in their own movies"
   );
 
 -- ─────────────────────────────────────────────
--- Private storage bucket for photos and songs (25 MB max per file)
+-- Private storage bucket for photos, songs, and clips (50 MB max per file)
 -- Files live at:  <user id>/<movie id>/<file>
 -- ─────────────────────────────────────────────
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values (
-  'uploads', 'uploads', false, 26214400,
+  'uploads', 'uploads', false, 52428800,
   array[
     'image/jpeg', 'image/png', 'image/webp',
     'audio/mpeg', 'audio/mp3', 'audio/mp4', 'audio/x-m4a', 'audio/aac',
-    'audio/wav', 'audio/x-wav'
+    'audio/wav', 'audio/x-wav',
+    'video/mp4'
   ]
 )
 on conflict (id) do update set

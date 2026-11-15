@@ -53,6 +53,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   if (inProgress && Date.now() - new Date(movie.updated_at).getTime() < STALE_MS) {
     return NextResponse.json({ error: "This movie is already being planned. Wait for it to finish." }, { status: 409 });
   }
+  if (movie.status === "generating" && Date.now() - new Date(movie.updated_at).getTime() < 4 * STALE_MS) {
+    return NextResponse.json({ error: "Wait for the clips to finish before planning again." }, { status: 409 });
+  }
 
   const { data: photoData } = await supabase
     .from("project_images")
@@ -64,7 +67,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: "Add at least 3 photos before planning the movie." }, { status: 400 });
   }
 
-  const previousStatus = inProgress ? "draft" : movie.status;
+  const previousStatus = inProgress ? "draft" : movie.status === "generating" ? "planned" : movie.status;
   await supabase.from("projects").update({ status: "directing", error: null }).eq("id", id);
 
   try {
@@ -89,11 +92,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     });
 
     // 3. Save the new photo order and each shot's motion.
+    //    A new plan means new motion, so any clips from the old plan are cleared.
     const updates = await Promise.all(
       plan.shots.map((shot, index) =>
         supabase
           .from("project_images")
-          .update({ position: index, motion_prompt: shot.motion })
+          .update({
+            position: index,
+            motion_prompt: shot.motion,
+            clip_status: "pending",
+            clip_path: null,
+            clip_request_id: null,
+            clip_error: null,
+          })
           .eq("id", shot.image_id),
       ),
     );

@@ -5,6 +5,7 @@ import MoviePlanner from "@/components/MoviePlanner";
 import { createClient } from "@/lib/supabase/server";
 import { signedUrlMap } from "@/lib/storage";
 import { isPlan } from "@/lib/plan";
+import { estimateClips } from "@/lib/video";
 import {
   ASPECT_NAME,
   STATUS_LABELS,
@@ -37,6 +38,8 @@ type Photo = {
   storage_path: string;
   styled_path: string | null;
   style_status: string;
+  clip_path: string | null;
+  clip_status: string;
   position: number;
 };
 
@@ -59,7 +62,7 @@ export default async function MoviePage({
       .maybeSingle(),
     supabase
       .from("project_images")
-      .select("id, storage_path, styled_path, style_status, position")
+      .select("id, storage_path, styled_path, style_status, clip_path, clip_status, position")
       .eq("project_id", id)
       .order("position", { ascending: true }),
   ]);
@@ -73,6 +76,7 @@ export default async function MoviePage({
   const urls = await signedUrlMap(supabase, [
     ...photos.map((p) => p.storage_path),
     ...photos.flatMap((p) => (p.styled_path ? [p.styled_path] : [])),
+    ...photos.flatMap((p) => (p.clip_path && p.clip_status === "done" ? [p.clip_path] : [])),
     ...(movie.song_path ? [movie.song_path] : []),
   ]);
   const songUrl = movie.song_path ? urls.get(movie.song_path) : undefined;
@@ -86,6 +90,14 @@ export default async function MoviePage({
     pending: photos.filter((p) => p.style_status === "queued" || p.style_status === "running").length,
   };
 
+  const clipCounts = {
+    total: photos.length,
+    done: photos.filter((p) => p.clip_status === "done").length,
+    failed: photos.filter((p) => p.clip_status === "failed").length,
+    pending: photos.filter((p) => p.clip_status === "queued" || p.clip_status === "running").length,
+  };
+  const canAnimate = !restyles || photos.every((p) => p.style_status === "done");
+
   // Shots follow the plan; photos added after planning are listed at the end.
   const plannedIds = new Set(plan?.shots.map((s) => s.image_id) ?? []);
   const shots = plan
@@ -96,6 +108,11 @@ export default async function MoviePage({
           .map((p) => ({ image_id: p.id, scene: "", motion: "", seconds: 5 })),
       ]
     : [];
+
+  // Cost estimate for the shots that don't have a finished clip yet.
+  const estimate = estimateClips(
+    shots.filter((s) => photoById.get(s.image_id)?.clip_status !== "done").map((s) => s.seconds),
+  );
 
   return (
     <>
@@ -143,6 +160,9 @@ export default async function MoviePage({
           restyles={restyles}
           styleName={STYLE_NAME[movie.style] ?? movie.style}
           counts={counts}
+          clipCounts={clipCounts}
+          canAnimate={canAnimate}
+          estimate={estimate}
           error={movie.error}
         />
       )}
@@ -159,16 +179,43 @@ export default async function MoviePage({
                 const original = urls.get(photo.storage_path);
                 const styled = photo.styled_path ? urls.get(photo.styled_path) : undefined;
                 const redrawing = photo.style_status === "queued" || photo.style_status === "running";
+                const clip =
+                  photo.clip_status === "done" && photo.clip_path ? urls.get(photo.clip_path) : undefined;
+                const animating = photo.clip_status === "queued" || photo.clip_status === "running";
                 return (
                   <li key={shot.image_id} className="shot">
                     <div className="shot-media" style={{ aspectRatio: ratio }}>
-                      {(styled ?? original) && <img src={styled ?? original} alt={`Shot ${i + 1}`} />}
-                      {styled && original && (
-                        <img className="shot-original" src={original} alt={`Original photo for shot ${i + 1}`} />
+                      {clip ? (
+                        <video
+                          className="shot-video"
+                          src={clip}
+                          poster={styled ?? original}
+                          controls
+                          muted
+                          loop
+                          playsInline
+                          preload="metadata"
+                          aria-label={`Clip for shot ${i + 1}`}
+                        />
+                      ) : (
+                        <>
+                          {(styled ?? original) && <img src={styled ?? original} alt={`Shot ${i + 1}`} />}
+                          {styled && original && (
+                            <img
+                              className="shot-original"
+                              src={original}
+                              alt={`Original photo for shot ${i + 1}`}
+                            />
+                          )}
+                        </>
                       )}
                       {restyles && redrawing && <span className="shot-flag">Redrawing…</span>}
                       {restyles && photo.style_status === "failed" && (
                         <span className="shot-flag is-failed">Not redrawn</span>
+                      )}
+                      {animating && <span className="shot-flag">Animating…</span>}
+                      {photo.clip_status === "failed" && (
+                        <span className="shot-flag is-failed">Not animated</span>
                       )}
                     </div>
                     <div className="shot-text">

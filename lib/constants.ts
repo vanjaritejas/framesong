@@ -58,6 +58,7 @@ export const STATUS_LABELS: Record<string, string> = {
   styling: "Redrawing photos",
   planned: "Plan ready",
   generating: "Animating",
+  animated: "Clips ready",
   editing: "Editing to the song",
   preview_ready: "Preview ready",
   rendering_4k: "Rendering 4K",
